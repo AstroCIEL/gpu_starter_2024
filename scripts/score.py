@@ -3,6 +3,8 @@ from argparse import ArgumentParser
 import json
 import pathlib
 import sys
+import numpy as np
+import cv2
 
 
 def main():
@@ -10,12 +12,12 @@ def main():
 
     parser = ArgumentParser()
     parser.add_argument(
-        "teams_folder", help="Path to teams folder (example: './sample_team')", type=pathlib.Path
+        "teams_folder", help="Path to teams folder (example: './sample_team')", type=pathlib.Path, nargs='?', default='./sample_team'
     )
     parser.add_argument(
         "label_folder",
         help="Path to golden label directory (example: './train/label')",
-        type=pathlib.Path,
+        type=pathlib.Path, nargs='?', default='./label'
     )
     parser.add_argument(
         "--multiple_teams",
@@ -100,12 +102,54 @@ def get_closest_object(golden_object, candidate_user_objects):
     return max_iou_object, max_iou
 
 
+
+
+
+def segmentation_to_mask(segmentation, image_shape):
+
+    mask = np.zeros(image_shape, dtype=np.uint8)
+    if segmentation:
+        for seg in segmentation:
+            poly = np.array(seg, np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(mask, [poly], 255)
+    return mask
+
+def calculate_mask_iou(mask1, mask2):
+
+    intersection = np.logical_and(mask1, mask2).sum()
+    union = np.logical_or(mask1, mask2).sum()
+    return intersection / union if union else 0
+
+def get_closest_seg_object(golden_object, candidate_user_objects):
+
+    max_seg_iou = 0
+    max_seg_iou_object = None
+    for user_object in candidate_user_objects:
+        if "segmentation" in golden_object and golden_object["segmentation"] and "segmentation" in user_object and user_object["segmentation"] and (user_object["type"] == golden_object["type"]):
+            mask_golden = segmentation_to_mask(golden_object["segmentation"], (3000, 3000)) 
+            mask_user = segmentation_to_mask(user_object["segmentation"], (3000, 3000))
+            mask_iou = calculate_mask_iou(mask_golden, mask_user)
+            # print(mask_iou)
+        else:
+            mask_iou = -1
+
+        if mask_iou > max_seg_iou:
+            max_seg_iou = mask_iou
+            max_seg_iou_object = user_object
+
+    return max_seg_iou_object, max_seg_iou
+
+
+
+
+
+
 def score_group(group, label_dir_path, debug):
     """Score a group"""
-
+    #print("group.type", type(group))
     result_json = group / "results.json"
     print("Scoring group", group, "results file:", result_json)
-
+    
     # Parse tree
     if not result_json.is_file():
         sys.exit("Missing results:", result_json)
@@ -121,6 +165,8 @@ def score_group(group, label_dir_path, debug):
     global_false_positives = 0
     global_false_negatives = 0
 
+    all_ious = []
+
     label_files = sorted(label_dir_path.iterdir())
 
     # img = root.find('image')
@@ -132,6 +178,8 @@ def score_group(group, label_dir_path, debug):
         filename = img.with_suffix(".jpg").name
         if debug:
             print(filename)
+            #for filename in result_data["objects"]:
+            #    print("  ", filename)
 
         if filename not in result_data["objects"]:
             print("Skipping", filename, "because it was not in results.json")
@@ -142,6 +190,11 @@ def score_group(group, label_dir_path, debug):
 
         for labelled_object in golden_data:
             if labelled_object["type"] >= 8:
+                seg_user_object, max_seg_iou = get_closest_seg_object(labelled_object, user_data)
+                all_ious.append(max_seg_iou)               
+                if seg_user_object:
+                    # print("seg object:", seg_user_object)
+                    user_data.remove(seg_user_object)
                 continue
 
             if debug:
@@ -199,6 +252,12 @@ def score_group(group, label_dir_path, debug):
     print("Precision:", round(precision, 3))
     print("Recall:", round(recall, 3))
     print("F1 score:", round(f1_score, 3))
+
+    if all_ious:
+        mean_miou = sum(all_ious) / len(all_ious)
+        print(f"mIoU: {mean_miou:.4f}")
+    else:
+        print("No segmentation data available for scoring.")
 
     fps = len(label_files) / runtime
     print("fps: ", round(fps, 2))
