@@ -6,10 +6,14 @@ import pathlib
 # import pynq
 import cv2
 import sys
+from score_miou import score_group
 
 DAC_CONTEST = pathlib.Path("/home/root/jupyter_notebooks/fpga_starter_2023/")
+TEAM_NAME = "sample_team"
 IMG_DIR = DAC_CONTEST / "images"
+LABEL_DIR = DAC_CONTEST / "labels"
 RESULT_DIR = DAC_CONTEST / "result"
+TEAM_DIR = DAC_CONTEST / TEAM_NAME
 
 BATCH_SIZE = 1000
 
@@ -86,7 +90,7 @@ class Team:
                     + str(len(object_locations))
                     + " object locations returned."
                 )
-            self.__object_data = self.__object_data | object_locations
+            self.__object_data.update(object_locations)
 
             runtime = end - start
             # energy = (
@@ -124,6 +128,7 @@ class Team:
         print("Savings results to XML...")
         self.save_results_xml()
         print("XML results written successfully.")
+        score_group(TEAM_DIR,LABEL_DIR,debug)
 
     def save_results_xml(self):
         if len(self.__object_data) != len(self.img_list):
